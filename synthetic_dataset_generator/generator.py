@@ -4,18 +4,20 @@ import cv2 as cv
 from cv2 import adaptiveThreshold
 import numpy as np
 import operator
+import random
 from PIL import Image, ImageEnhance
 
 from matplotlib import pyplot as plt
 
-import synthetic_dataset_generator.generator_utils as gen_utils
+import generator_utils as gen_utils
 
 # TODO QuPath
 
 
 # Concatenate many cells into one image
-def concat_many_cell_images(img_list, file_name):
-    background = "C:/Users/lytle/OneDrive/Documents/UP/Cenek_Research/cell_photos/background_B.tif"
+def concat_many_cell_images(img_list, file_name, output_dir,
+                            shift=(0, 0), shift_mode='r'):
+    background = "background_B.tif"
     background_img = cv.imread(background)
 
     # variables for new height and width
@@ -43,24 +45,51 @@ def concat_many_cell_images(img_list, file_name):
     to_blend = []
     for img in rgb_img_list:
         new_img = Image.new('RGBA', size=(n_w, n_h), color=(0, 0, 0, 0))
+
+        # Create a random shift to the images to make them more realistic and spread out
+        x_shift = random.randint(-30, 30)
+        y_shift = random.randint(-30, 30)
+
+        # make sure the new shift doesn't go over
+        if n_h <= img.height + x_shift <= 0:
+            x_shift = 0
+
+        if n_w <= img.width + y_shift <= 0:
+            y_shift = 0
+
         new_img.paste(new_background_img)
-        new_img.paste(img)
+        new_img.paste(img, (x_shift, y_shift))
         to_blend.append(new_img)
 
-    plt.imshow(to_blend[0]), plt.show()
-    plt.imshow(to_blend[1]), plt.show()
-    plt.imshow(to_blend[2]), plt.show()
+    # Make the first image the starting point
+    result = to_blend[0]
 
-    result = Image.blend(to_blend[0], to_blend[1], alpha=0.5)
-    result = Image.blend(result, to_blend[2], alpha=0.5)
-    # for n in range(1, len(to_blend) - 1):
-    #     result = Image.blend(result, to_blend[n], alpha=0.5)
-    #     plt.imshow(result), plt.show()
+    for i in range(1, len(to_blend)):
+        result = Image.blend(result, to_blend[i], alpha=0.5)
 
-    converter = ImageEnhance.Contrast(result)
-    result = converter.enhance(1.5)
+        # Create an enhancer element
+        converter = ImageEnhance.Contrast(result)
+        result = converter.enhance(1.75)
 
-    plt.imshow(result), plt.show()
+    # Save Images
+    result.save(os.path.join(output_dir, "cell_clusters/" + file_name + ".png"))
+
+    # Get image names for GTs
+    img1_name, img2_name, img3_name = file_name.split("_")
+    img_names = file_name.split("_")
+
+    img1_seg = gen_utils.segmentation(img_list[0], (n_h, n_w))
+    cv.imwrite(os.path.join(output_dir, "cell_clusters_gt/" + file_name + "_" + img1_name + "_gt.png"), img1_seg)
+    img2_seg = gen_utils.segmentation(img_list[1], (n_h, n_w))
+    cv.imwrite(os.path.join(output_dir, "cell_clusters_gt/" + file_name + "_" + img2_name + "_gt.png"), img2_seg)
+    img3_seg = gen_utils.segmentation(img_list[2], (n_h, n_w))
+    cv.imwrite(os.path.join(output_dir, "cell_clusters_gt/" + file_name + "_" + img3_name + "_gt.png"), img3_seg)
+
+    for i in range(0, len(img_list)):
+        img_seg = gen_utils.segmentation(img_list[i], (n_h, n_w))
+
+
+
 
 
 # This will take a list of images and concatenate then together.
@@ -85,26 +114,21 @@ def concat_images_with_background(img_list, file_name):
     img1 = Image.fromarray(img1)
     img2 = Image.fromarray(img2)
 
-    # suppose img2 is to be shifted by `shift` amount
-    shift = (0, 0)
-
     # compute the size of the panorama
-    nw, nh = map(max, map(operator.add, img2.size, shift), img1.size)
+    nw, nh = map(max, map(operator.add, img2.size), img1.size)
 
     # Convert background image to image
     background_img = Image.fromarray(background_img[:nh, :nw, :])
 
     # paste img1 on top of img2
     newimg1 = Image.new('RGBA', size=(nw, nh), color=(0, 0, 0, 0))
-    newimg1.paste(background_img, shift)
-    # newimg1.paste(img2, shift)
-    newimg1.paste(img1, (0, 0))
+    newimg1.paste(background_img)
+    newimg1.paste(img1)
 
     # paste img2 on top of img1
     newimg2 = Image.new('RGBA', size=(nw, nh), color=(0, 0, 0, 0))
-    newimg2.paste(background_img, shift)
-    # newimg2.paste(img1, (0, 0))
-    newimg2.paste(img2, shift)
+    newimg2.paste(background_img)
+    newimg2.paste(img2)
 
     # blend with alpha=0.5
     result = Image.blend(newimg1, newimg2, alpha=0.5)
@@ -118,9 +142,9 @@ def concat_images_with_background(img_list, file_name):
     # Get image names for GTs
     img1_name, img2_name = file_name.split("_")
 
-    img1_seg = segmentation(img_list[0], (nh, nw))
+    img1_seg = gen_utils.segmentation(img_list[0], (nh, nw))
     cv.imwrite(os.path.join(OUTPUT_DIR, "cell_clusters_gt/" + file_name + "_" + img1_name + "_gt.png"), img1_seg)
-    img2_seg = segmentation(img_list[1], (nh, nw))
+    img2_seg = gen_utils.segmentation(img_list[1], (nh, nw))
     cv.imwrite(os.path.join(OUTPUT_DIR, "cell_clusters_gt/" + file_name + "_" + img2_name + "_gt.png"), img2_seg)
 
 
@@ -253,36 +277,14 @@ def concat_images_by_segmentation(img1, img2):
     plt.imshow(newimg1), plt.show()
 
 
-# Preform image segmentation on cell
-# Parameters:
-#   img - the image to segment
-#   new_size - size of the image to be produced
-#              Any new additions will be added as black backgrounds
-#              Set to None by default meaning that it won't height or width to the image
-def segmentation(img, new_size=None):
-    gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-    ret, seg_img = cv.threshold(gray, 100, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU)
-    # seg_img = adaptiveThreshold(gray, 255, cv.ADAPTIVE_THRESH_MEAN_C, cv.THRESH_BINARY, 5, 2)
-    # seg_img = adaptiveThreshold(gray, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 101, 21)
-    if new_size is not None:
-        bot_border = new_size[0] - seg_img.shape[0]
-        right_border = new_size[1] - seg_img.shape[1]
-        seg_img = cv.copyMakeBorder(seg_img, 0, bot_border, 0, right_border, cv.BORDER_CONSTANT, value=[0, 0, 0])
-    return seg_img
-
-
 # argv[1] = input Dir
 # argv[2] = output Dir
 if __name__ == "__main__":
     # Check if there are input arguments
-    if len(sys.argv) >= 3 or len(sys.argv) == 1:
-        if len(sys.argv) == 1:
-            INPUT_DIR = "C:/Users/lytle/OneDrive/Documents/UP/Cenek_Research/cell_photos/croped_cells"
-            OUTPUT_DIR = "C:/Users/lytle/OneDrive/Documents/UP/Cenek_Research/cell_photos/test_output_v2"
-        else:
-            # Save arguments
-            INPUT_DIR = sys.argv[1]
-            OUTPUT_DIR = sys.argv[2]
+    if len(sys.argv) >= 3:
+        # Save arguments
+        INPUT_DIR = sys.argv[1]
+        OUTPUT_DIR = sys.argv[2]
 
         if not os.listdir(INPUT_DIR):
             print("Input path is not a valid directory")
@@ -293,16 +295,8 @@ if __name__ == "__main__":
             print("Got: " + OUTPUT_DIR)
 
         else:
-            # Set plotting flag
-            # This is used for if you want images to be shown while being processed
-            # TODO: check for flag name.  Something like show
-            if len(sys.argv) == 4:
-                SHOW_IMAGE_FLAG = False
-            else:
-                SHOW_IMAGE_FLAG = False
-
             # List of images and GTs [(original image, GT)]
-            imp_list = []
+            img_list = []
 
             file_count = 0
             print("Getting images from : " + INPUT_DIR)
@@ -311,38 +305,70 @@ if __name__ == "__main__":
                 if file.endswith(".tif") or file.endswith(".png") or file.endswith(".jpg"):
                     # Read image from file and get gt
                     image = cv.imread(os.path.join(INPUT_DIR, file))
-                    gt = segmentation(image)
-
-                    # imp_list.append((file, image, gt))
+                    gt = gen_utils.segmentation(image)
 
                     # Flip image
                     horizontal_img = cv.flip(image.copy(), 0)
                     vertical_img = cv.flip(image.copy(), 1)
                     both_img = cv.flip(image.copy(), -1)
 
-                    horizontal_img_gt = segmentation(horizontal_img)
-                    vertical_img_gt = segmentation(vertical_img)
-                    both_img_gt = segmentation(both_img)
+                    horizontal_img_gt = gen_utils.segmentation(horizontal_img)
+                    vertical_img_gt = gen_utils.segmentation(vertical_img)
+                    both_img_gt = gen_utils.segmentation(both_img)
 
                     new_file_name = file.split(".")[0]
 
                     # Add images to img list
-                    imp_list.append((str(file_count), image, gt))
-                    imp_list.append((str(file_count) + "h", horizontal_img, horizontal_img_gt))
-                    imp_list.append((str(file_count) + "v", vertical_img, vertical_img_gt))
-                    imp_list.append((str(file_count) + "b", both_img, both_img_gt))
+                    img_list.append((str(file_count), image, gt))
+                    img_list.append((str(file_count) + "h", horizontal_img, horizontal_img_gt))
+                    img_list.append((str(file_count) + "v", vertical_img, vertical_img_gt))
+                    img_list.append((str(file_count) + "b", both_img, both_img_gt))
 
                     # Increase file Count
                     file_count += 1
-            print(len(imp_list))
-            for n in range(0, len(imp_list)):
-                img1 = imp_list[n][1]
-                img1_name = imp_list[n][0]
-                for i in range(n+1, len(imp_list)):
-                    img2 = imp_list[i][1]
-                    img2_name = imp_list[i][0]
-                    name = img1_name + "_" + img2_name
-                    concat_images_with_background([img1, img2], name)
+
+            print(f"There are {len(img_list)} images to blend from {file_count} images")
+
+
+            # for n in range(0, len(img_list)):
+            #     break
+            #     img1 = img_list[n][1]
+            #     img1_name = img_list[n][0]
+            #     for i in range(n+1, len(img_list)):
+            #         img2 = img_list[i][1]
+            #         img2_name = img_list[i][0]
+            #         name = img1_name + "_" + img2_name
+            #         concat_images_with_background([img1, img2], name)
+
+            num = 20
+            np.random.shuffle(img_list)
+            for n in range(0, num):
+                print(f"{(n/num)*100}%")
+                img1 = img_list[n][1]
+                img1_name = img_list[n][0]
+                for i in range(n + 1, num):
+                    img2 = img_list[i][1]
+                    img2_name = img_list[i][0]
+                    for j in range(i + 1, num):
+                        img3 = img_list[j][1]
+                        img3_name = img_list[j][0]
+
+                        img_name = img1_name + "_" + img2_name + "_" + img3_name
+
+                        concat_many_cell_images([img1, img2, img3], img_name, OUTPUT_DIR)
+
+            n = 20  # Number of images to generate
+            c = 3  # Number of overlapping cells per image
+            np.random.shuffle(img_list)  # Shuffle list
+            for i in range(0, n):
+                cells = img_list[i:i+c][1]
+                call_names = img_list[i:i+c][0]
+
+
+
+            # test = concat_many_cell_images([img1, img2, img3], "")
+
+
     else:
         print("Invalid Arguments Length")
         print("argv[1]: Input Directory")
